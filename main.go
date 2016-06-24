@@ -9,50 +9,13 @@ import (
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
 	"github.com/google/gopacket/pcapgo"
+	"github.com/google/gopacket/tcpassembly"
+	"github.com/google/gopacket/tcpassembly/tcpreader"
 	"os"
 	"strconv"
 	"strings"
 )
 
-/*
-func writeData(w *pcapgo.Writer, source *gopacket.PacketSource) error {
-	defragger := ip4defrag.NewIPv4Defragmenter()
-	w.WriteFileHeader(65536, layers.LinkTypeEthernet)
-	for packet := range source.Packets() {
-		tcpLayer := packet.Layer(layers.LayerTypeTCP)
-		if tcpLayer != nil {
-			// do assemble
-		} else {
-			v6Layer := packet.Layer(layers.LayerTypeIPv6)
-			if v6Layer != nil {
-				// do v6 defrag
-			} else {
-				v4Layer := packet.Layer(layers.LayerTypeIPv4)
-				if v4Layer == nil {
-					continue
-				}
-				in, err := defragger.DefragIPv4(v4Layer)
-				if err != nil {
-					return err
-				} else if in == nil { //part of fragment continue
-					continue
-				} else {
-					err := w.WritePacket(packet.Metadata().CaptureInfo, in.LayerContents()) //write the header
-					if err != nil {
-						return err
-					}
-					err := w.WritePacket(packet.Metadata().CaptureInfo, in.LayerPayload()) // write the payload
-					if err != nil {
-						return err
-					}
-				}
-			}
-		}
-
-	}
-	return nil
-
-}*/
 func readSource(source *gopacket.PacketDataSource, tcpPack chan *gopacket.Packet,
 	normalPack chan *gopacket.Packet, fragV4Pack chan *gopacket.Packet) {
 	for packet := range source.Packets() {
@@ -97,33 +60,34 @@ func readSource(source *gopacket.PacketDataSource, tcpPack chan *gopacket.Packet
 
 }
 func pcapWrite(w *pcapgo.Writer, pack chan *gopacket.Packet) error {
-	err := w.WritePacket(packet.Metadata().CaptureInfo, pack.Data()) // write the payload
-	if err != nil {
-		return err
+	for {
+		<-pack
+		err := w.WritePacket(data.Metadata().CaptureInfo, data.Data()) // write the payload
+		if err != nil {
+			return err
+		}
 	}
 }
 func v4Defrag(v4frag chan gopacket.Packet, normalPack chan gopacket.Packet) error {
 	defragger := ip4defrag.NewIPv4Defragmenter()
 	for {
-		select {
-		case <-v4frag:
-			in, err := defragger.DefragIPv4(v4Layer)
+		<-v4frag
+		in, err := defragger.DefragIPv4(v4Layer)
+		if err != nil {
+			return err
+		} else if in == nil { //part of fragment continue
+			continue
+		} else {
+			length := len(in.LayerContents()) + len(in.LayerPayload())
+			dataCopy := make([]byte, length)
+			copy(datacopy, in.LayerContents())
+			copy(datacopy, in.LayerPayload())
+			resultPack := gopacket.NewPacket(datacopy, layers.LayerTypeIPv4, gopacket.Default)
+			err := resultPack.ErrorLayer()
 			if err != nil {
-				return err
-			} else if in == nil { //part of fragment continue
-				continue
-			} else {
-				length := len(in.LayerContents()) + len(in.LayerPayload())
-				dataCopy := make([]byte, length)
-				copy(datacopy, in.LayerContents())
-				copy(datacopy, in.LayerPayload())
-				resultPack := gopacket.NewPacket(datacopy, layers.LayerTypeIPv4, gopacket.Default)
-				err := resultPack.ErrorLayer()
-				if err != nil {
-					fmt.Println("Error decoding some part of the packet:", err) //need error handle here
-				}
-				normalPack <- resultPack
+				fmt.Println("Error decoding some part of the packet:", err) //need error handle here
 			}
+			normalPack <- resultPack
 		}
 	}
 	return nil
@@ -139,7 +103,8 @@ func notFraV4(ip *layers.IPv4) bool {
 	}
 	return false
 }
-func tcpAssemble(tcpPack chan *gopacket.Packet) {
+func tcpAssemble(tcpPack chan *gopacket.Packet, assembler *tcpassembly.Assembler) {
+
 	tcp := packet.TransportLayer().(*layers.TCP)
 	assembler.AssembleWithTimestamp(packet.NetworkLayer().NetworkFlow(), tcp, packet.Metadata().Timestamp)
 }
@@ -191,7 +156,7 @@ func (h *dnsStream) creatPacket(msg_buf []byte, nomalPack chan gopacket.Packet) 
 	b_buf = bytes.NewBuffer(h.transport.Dst().Raw())
 	binary.Read(b_buf, binary.BigEndian, &DesPort)
 	//new a UDP layer
-	udpLayer := &UDP{
+	udpLayer := layers.UDP{
 		BaseLayer: BaseLayer{
 			Contents: []byte{},
 			Payload:  msg_buf,
@@ -203,7 +168,7 @@ func (h *dnsStream) creatPacket(msg_buf []byte, nomalPack chan gopacket.Packet) 
 		sPort:    h.transport.Src().Raw(),
 		dPort:    h.transport.Dst().Raw(),
 	}
-	seriousBuffer := gopacket.NewSerializeBuffer() // this buffer could be used as a payload of IP layer
+	UDPNewSerializBuffer := gopacket.NewSerializeBuffer() // this buffer could be used as a payload of IP layer
 	ops := gopacket.SerializeOptions{
 		FixLengths:       true,
 		ComputeChecksums: true,
@@ -213,14 +178,61 @@ func (h *dnsStream) creatPacket(msg_buf []byte, nomalPack chan gopacket.Packet) 
 		err = nil
 		//	need err handle there
 	}
-	if h.net.EndpointType() == layers.EndpointIPv4 {
-		//parse NETWORK layer as IPV4
+	if h.net.EndpointType() == layers.EndpointIPv4 { // if it is from ipv4, construct a ipv4 layer
+		ip := layers.IPv4{
+			BaseLayer: BaseLayer{
+				Contents: []byte{},
+				Payload:  UDPNewSerializBuffer.Bytes(),
+			},
+			Version:    4,
+			IHL:        0,
+			TOS:        0,
+			Length:     0,
+			Id:         0,
+			Flags:      0,
+			FragOffset: 0,
+			TTL:        0,
+			Protocol:   0,
+			Checksum:   0,
+			SrcIP:      h.net.Src().Raw(),
+			DstIP:      h.net.Dst().Raw(),
+			Options:    []IPv4Option{},
+			Padding:    []byte{},
+		}
+		//serialize it and use the serilize buffer to new packet
+		IPserializeBuffer := gopacket.NewSerializeBuffer()
+		ip.SerializeTo(IPserializeBuffer, ops)
+		resultPack := gopacket.NewPacket(IPserializeBuffer.Bytes(), layers.LayerTypeIPv4, gopacket.Default)
+		nomalPack <- resultPack
+		return
+
 	} else if h.net.EndpointType() == layers.EndpointIPv6 {
-		//parse NETWORK layer as IPV6
+		// if it is in IPV6 contruct ipv6 packet
+		ip := layers.IPv6{
+			BaseLayer: BaseLayer{
+				Contents: []byte{},
+				Payload:  UDPNewSerializBuffer.Bytes(),
+			},
+			Version:      6,
+			TrafficClass: 0,
+			FlowLabel:    0,
+			Length:       0,
+			NextHeader:   0,
+			HopLimit:     0,
+			SrcIP:        h.net.Src().Raw(),
+			DstIP:        h.net.Dst().Raw(),
+			HopByHop:     nil,
+			// hbh will be pointed to by HopByHop if that layer exists.
+			hbh: nil,
+		}
+		IPserializeBuffer := gopacket.NewSerializeBuffer()
+		ip.SerializeTo(IPserializeBuffer, ops)
+		resultPack := gopacket.NewPacket(IPserializeBuffer.Bytes(), layers.LayerTypeIPv6, gopacket.Default)
+		nomalPack <- resultPack
+		return
 	} else {
 		return //unknown network just return?
 	}
-	// make udp packet then IP, then send it need to add necessary information to DNS stream
 }
 func main() {
 	var FilePathInput string
@@ -243,4 +255,15 @@ func main() {
 	w := pcapgo.NewWriter(Output)
 	defer Output.Close()
 	// need add function call here
+	tcpPack := make(chan gopacket.Packet, 5) // maybe need change buffersize for chan
+	nomalPack := make(chan gopacket.Packet, 5)
+	fragV4Pack := make(chan gopacket.Packet, 5)
+	go readSource(packetSource, tcpPack, nomalPack, fragV4Pack)
+	go v4Defrag(fragV4Pack, nomalPack)
+	go pcapWrite(w, nomalPack)
+	streamFactory := &DNSStreamFactory{}
+	streamPool := tcpassembly.NewStreamPool(streamFactory)
+	assembler := tcpassembly.NewAssembler(streamPool)
+	go tcpAssemble(tcpPack, assembler)
+
 }
