@@ -72,7 +72,11 @@ func readSource(source *gopacket.PacketSource, tcpPack chan gopacket.Packet,
 				if v4Layer == nil {
 					//write it
 				}
-				if notFraV4(v4Layer) {
+				ip := layers.IPv4{}
+				ipData := append(v4Layer.LayerContents(), v4Layer.LayerPayload()...)
+				df := gopacket.NilDecodeFeedback
+				ip.DecodeFromBytes(ipData, df)
+				if notFraV4(ip) {
 					normalPack <- packet
 				} else {
 					fragV4Pack <- packet
@@ -112,7 +116,12 @@ func v4Defrag(v4frag chan gopacket.Packet, normalPack chan gopacket.Packet) erro
 	defragger := ip4defrag.NewIPv4Defragmenter()
 	for {
 		fragpack := <-v4frag
-		in, err := defragger.DefragIPv4(fragpack.Layer(layers.LayerTypeIPv4))
+		layer := fragpack.Layer(layers.LayerTypeIPv4)
+		ip := layers.IPv4{}
+		data := append(layer.LayerContents(), layer.LayerPayload()...)
+		df := gopacket.NilDecodeFeedback
+		ip.DecodeFromBytes(data, df)
+		in, err := defragger.DefragIPv4(&ip)
 		if err != nil {
 			return err
 		} else if in == nil { //part of fragment continue
@@ -134,7 +143,7 @@ func v4Defrag(v4frag chan gopacket.Packet, normalPack chan gopacket.Packet) erro
 	}
 	return nil
 }
-func notFraV4(ip *layers.IPv4) bool {
+func notFraV4(ip layers.IPv4) bool {
 	// don't defrag packet with DF flag
 	if ip.Flags&layers.IPv4DontFragment != 0 {
 		return true
@@ -151,7 +160,9 @@ func tcpAssemble(tcpPack chan gopacket.Packet, assembler *tcpassembly.Assembler)
 	assembler.AssembleWithTimestamp(packet.NetworkLayer().NetworkFlow(), tcp, packet.Metadata().Timestamp)
 }
 
-type DNSStreamFactory struct{}
+type DNSStreamFactory struct {
+	normal chan gopacket.Packet
+}
 
 // httpStream will handle the actual decoding of http requests.
 type dnsStream struct {
@@ -165,15 +176,15 @@ func (h *DNSStreamFactory) New(net, transport gopacket.Flow) tcpassembly.Stream 
 		transport: transport,
 		r:         tcpreader.NewReaderStream(),
 	}
-	go hstream.run() // Important... we must guarantee that data from the reader stream is read.
+	go hstream.run(h.normal) // Important... we must guarantee that data from the reader stream is read.
 	// ReaderStream implements tcpassembly.Stream, so we can return a pointer to it.
-	return &hstream
+	return &hstream.r
 }
 
 func (h *dnsStream) run(nomalpack chan gopacket.Packet) {
 	for {
 		len_buf := make([]byte, 2, 2)
-		nread, err := io.ReadFull(&h, len_buf)
+		nread, err := io.ReadFull(&h.r, len_buf)
 		if nread < 2 || err != nil {
 			err = nil
 			continue // not sure
@@ -181,7 +192,7 @@ func (h *dnsStream) run(nomalpack chan gopacket.Packet) {
 		}
 		msg_len := len_buf[0]<<8 | len_buf[1]
 		msg_buf := make([]byte, msg_len, msg_len)
-		nread, err = io.ReadFull(&h, msg_buf)
+		nread, err = io.ReadFull(&h.r, msg_buf)
 		if err != nil {
 			err = nil
 			continue //not sure
@@ -300,7 +311,7 @@ func main() {
 	go readSource(packetSource, tcpPack, nomalPack, fragV4Pack)
 	go v4Defrag(fragV4Pack, nomalPack)
 	go pcapWrite(w, nomalPack)
-	streamFactory := &DNSStreamFactory{}
+	streamFactory := &DNSStreamFactory{normal: nomalPack}
 	streamPool := tcpassembly.NewStreamPool(streamFactory)
 	assembler := tcpassembly.NewAssembler(streamPool)
 	go tcpAssemble(tcpPack, assembler)
