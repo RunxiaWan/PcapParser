@@ -123,7 +123,7 @@ func v4Defrag(v4frag chan gopacket.Packet, normalPack chan gopacket.Packet) erro
 		ip.DecodeFromBytes(data, df)
 		in, err := defragger.DefragIPv4(&ip)
 		if err != nil {
-			return err
+			return err //error handle
 		} else if in == nil { //part of fragment continue
 			continue
 		} else {
@@ -187,7 +187,8 @@ func (h *dnsStream) run(nomalpack chan gopacket.Packet) {
 		nread, err := io.ReadFull(&h.r, len_buf)
 		if nread < 2 || err != nil {
 			err = nil
-			continue // not sure
+			fmt.Printf("error in reading first two bytes")
+			continue //not sure
 			// needs error handle there
 		}
 		msg_len := len_buf[0]<<8 | len_buf[1]
@@ -195,8 +196,9 @@ func (h *dnsStream) run(nomalpack chan gopacket.Packet) {
 		nread, err = io.ReadFull(&h.r, msg_buf)
 		if err != nil {
 			err = nil
+			fmt.Printf("error in reading full tcp data")
 			continue //not sure
-			// need error handle there
+			// needs error handle there
 		}
 		h.creatPacket(msg_buf, nomalpack)
 	}
@@ -226,7 +228,9 @@ func (h *dnsStream) creatPacket(msg_buf []byte, nomalPack chan gopacket.Packet) 
 	}
 	err := udpLayer.SerializeTo(UDPNewSerializBuffer, ops)
 	if err != nil {
-		err = nil
+		fmt.Print("error in create udp Layer")
+		return
+		//err = nil
 		//	need err handle there
 	}
 	if h.net.EndpointType() == layers.EndpointIPv4 { // if it is from ipv4, construct a ipv4 layer
@@ -252,7 +256,13 @@ func (h *dnsStream) creatPacket(msg_buf []byte, nomalPack chan gopacket.Packet) 
 		}
 		//serialize it and use the serilize buffer to new packet
 		IPserializeBuffer := gopacket.NewSerializeBuffer()
-		ip.SerializeTo(IPserializeBuffer, ops)
+		err = ip.SerializeTo(IPserializeBuffer, ops)
+		if err != nil {
+			fmt.Print("error in create ipv4 Layer")
+			return
+			//err = nil
+			//	need err handle there
+		}
 		resultPack := gopacket.NewPacket(IPserializeBuffer.Bytes(), layers.LayerTypeIPv4, gopacket.Default)
 		nomalPack <- resultPack
 		return
@@ -276,7 +286,11 @@ func (h *dnsStream) creatPacket(msg_buf []byte, nomalPack chan gopacket.Packet) 
 			// hbh will be pointed to by HopByHop if that layer exists.
 		}
 		IPserializeBuffer := gopacket.NewSerializeBuffer()
-		ip.SerializeTo(IPserializeBuffer, ops)
+		err := ip.SerializeTo(IPserializeBuffer, ops)
+		if err != nil {
+			fmt.Printf("error in creat IPV6 Layer")
+			return
+		}
 		resultPack := gopacket.NewPacket(IPserializeBuffer.Bytes(), layers.LayerTypeIPv6, gopacket.Default)
 		nomalPack <- resultPack
 		return

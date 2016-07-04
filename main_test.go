@@ -73,8 +73,8 @@ func TestTCP(t *testing.T) {
 	if err != nil {
 		panic(err)
 	}
+	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())\
 	defer handle.Close()
-	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
 	tcpPack := make(chan gopacket.Packet, 10)
 	nomalPack := make(chan gopacket.Packet, 5)
 	for input_pack := range packetSource.Packets() { // send tcp package for channel
