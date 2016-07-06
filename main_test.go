@@ -2,12 +2,13 @@ package main
 
 import (
 	"bytes"
-	"dns-master"
+	//	"dns-master"
 	"fmt"
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/bytediff"
 	"github.com/google/gopacket/pcap"
 	"github.com/google/gopacket/tcpassembly"
+	"github.com/miekg/dns"
 	"net"
 )
 import "testing"
@@ -73,7 +74,7 @@ func TestTCP(t *testing.T) {
 	if err != nil {
 		panic(err)
 	}
-	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())\
+	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
 	defer handle.Close()
 	tcpPack := make(chan gopacket.Packet, 10)
 	nomalPack := make(chan gopacket.Packet, 5)

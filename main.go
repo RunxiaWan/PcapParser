@@ -1,4 +1,3 @@
-// PcapParser project main.go
 package main
 
 import (
@@ -51,13 +50,12 @@ func writeData(w *pcapgo.Writer, source *gopacket.PacketSource) error {
 				}
 			}
 		}
-
 	}
 	return nil
-
 }*/
 func readSource(source *gopacket.PacketSource, tcpPack chan gopacket.Packet,
-	normalPack chan gopacket.Packet, fragV4Pack chan gopacket.Packet) {
+	normalPack chan gopacket.Packet, fragV4Pack chan gopacket.Packet,
+	endNotification chan bool) {
 	for packet := range source.Packets() {
 		tcpLayer := packet.Layer(layers.LayerTypeTCP)
 		if tcpLayer != nil {
@@ -101,16 +99,23 @@ func readSource(source *gopacket.PacketSource, tcpPack chan gopacket.Packet,
 		}
 
 	}
+	fmt.Printf("done reading in readSource()\n")
+	endNotification <- true
 
 }
 func pcapWrite(w *pcapgo.Writer, pack chan gopacket.Packet) error {
+	var err error
 	for {
 		packet := <-pack
-		err := w.WritePacket(packet.Metadata().CaptureInfo, packet.Data()) // write the payload
+		fmt.Println("receive a package in pcap Write")
+		err = w.WritePacket(packet.Metadata().CaptureInfo, packet.Data()) // write the payload
 		if err != nil {
-			return err
+			fmt.Println("error in Write File: ", err)
+			continue
 		}
+		fmt.Println("susccessfully write a package")
 	}
+	return err
 }
 func v4Defrag(v4frag chan gopacket.Packet, normalPack chan gopacket.Packet) error {
 	defragger := ip4defrag.NewIPv4Defragmenter()
@@ -155,9 +160,10 @@ func notFraV4(ip layers.IPv4) bool {
 	return false
 }
 func tcpAssemble(tcpPack chan gopacket.Packet, assembler *tcpassembly.Assembler) {
-	packet := <-tcpPack
-	tcp := packet.TransportLayer().(*layers.TCP)
-	assembler.AssembleWithTimestamp(packet.NetworkLayer().NetworkFlow(), tcp, packet.Metadata().Timestamp)
+	for packet := range tcpPack {
+		tcp := packet.TransportLayer().(*layers.TCP)
+		assembler.AssembleWithTimestamp(packet.NetworkLayer().NetworkFlow(), tcp, packet.Metadata().Timestamp)
+	}
 }
 
 type DNSStreamFactory struct {
@@ -182,23 +188,23 @@ func (h *DNSStreamFactory) New(net, transport gopacket.Flow) tcpassembly.Stream 
 }
 
 func (h *dnsStream) run(nomalpack chan gopacket.Packet) {
+	fmt.Printf("reading rebuilt TCP stream\n")
 	for {
 		len_buf := make([]byte, 2, 2)
 		nread, err := io.ReadFull(&h.r, len_buf)
-		if nread < 2 || err != nil {
-			err = nil
-			fmt.Printf("error in reading first two bytes")
-			continue //not sure
+		fmt.Printf("Read %d bytes\n", nread)
+		if nread < 2 || (err != nil && err != io.EOF) {
 			// needs error handle there
+			fmt.Printf("error in reading first two bytes: %s", err)
+			break
 		}
-		msg_len := len_buf[0]<<8 | len_buf[1]
+		msg_len := uint(len_buf[0])<<8 | uint(len_buf[1])
+		fmt.Printf("msg_len:%d\n", msg_len)
 		msg_buf := make([]byte, msg_len, msg_len)
 		nread, err = io.ReadFull(&h.r, msg_buf)
 		if err != nil {
-			err = nil
-			fmt.Printf("error in reading full tcp data")
-			continue //not sure
-			// needs error handle there
+			fmt.Printf("error in reading full tcp data: %s", err)
+			break
 		}
 		h.creatPacket(msg_buf, nomalpack)
 	}
@@ -226,6 +232,22 @@ func (h *dnsStream) creatPacket(msg_buf []byte, nomalPack chan gopacket.Packet) 
 		FixLengths:       true,
 		ComputeChecksums: true,
 	}
+	if h.net.EndpointType() == layers.EndpointIPv4 {
+		ip_checksum := layers.IPv4{}
+		ip_checksum.Version = 4
+		ip_checksum.TTL = 0
+		ip_checksum.SrcIP = h.net.Src().Raw()
+		ip_checksum.DstIP = h.net.Dst().Raw()
+		udpLayer.SetNetworkLayerForChecksum(&ip_checksum)
+	} else {
+		ip6_checksum := layers.IPv6{}
+		ip6_checksum.Version = 6
+		ip6_checksum.NextHeader = layers.IPProtocolNoNextHeader
+		ip6_checksum.HopLimit = 0
+		ip6_checksum.SrcIP = h.net.Src().Raw()
+		ip6_checksum.DstIP = h.net.Dst().Raw()
+		udpLayer.SetNetworkLayerForChecksum(&ip6_checksum)
+	}
 	err := udpLayer.SerializeTo(UDPNewSerializBuffer, ops)
 	if err != nil {
 		fmt.Print("error in create udp Layer")
@@ -233,6 +255,7 @@ func (h *dnsStream) creatPacket(msg_buf []byte, nomalPack chan gopacket.Packet) 
 		//err = nil
 		//	need err handle there
 	}
+	fmt.Println("finished creat udplayer, the length is ", udpLayer.Length)
 	if h.net.EndpointType() == layers.EndpointIPv4 { // if it is from ipv4, construct a ipv4 layer
 		ip := layers.IPv4{
 			BaseLayer: layers.BaseLayer{
@@ -247,7 +270,7 @@ func (h *dnsStream) creatPacket(msg_buf []byte, nomalPack chan gopacket.Packet) 
 			Flags:      0,
 			FragOffset: 0,
 			TTL:        0,
-			Protocol:   0,
+			Protocol:   layers.IPProtocolRUDP,
 			Checksum:   0,
 			SrcIP:      h.net.Src().Raw(),
 			DstIP:      h.net.Dst().Raw(),
@@ -263,7 +286,13 @@ func (h *dnsStream) creatPacket(msg_buf []byte, nomalPack chan gopacket.Packet) 
 			//err = nil
 			//	need err handle there
 		}
+		fmt.Println("finished creat ip, the length is ", ip.Length)
 		resultPack := gopacket.NewPacket(IPserializeBuffer.Bytes(), layers.LayerTypeIPv4, gopacket.Default)
+
+		resultPack.Metadata().CaptureLength = len(resultPack.Data())
+		resultPack.Metadata().Length = len(resultPack.Data())
+		fmt.Println("package length", resultPack.Metadata().Length)
+		//seems the capture length is 0 so the pcapwrite cannot write it, try to give them a write value
 		nomalPack <- resultPack
 		return
 
@@ -278,7 +307,7 @@ func (h *dnsStream) creatPacket(msg_buf []byte, nomalPack chan gopacket.Packet) 
 			TrafficClass: 0,
 			FlowLabel:    0,
 			Length:       0,
-			NextHeader:   0,
+			NextHeader:   layers.IPProtocolNoNextHeader, //no sure what next header should be used there
 			HopLimit:     0,
 			SrcIP:        h.net.Src().Raw(),
 			DstIP:        h.net.Dst().Raw(),
@@ -291,7 +320,12 @@ func (h *dnsStream) creatPacket(msg_buf []byte, nomalPack chan gopacket.Packet) 
 			fmt.Printf("error in creat IPV6 Layer")
 			return
 		}
+		fmt.Println("finished creat ip, the length is ", ip.Length)
 		resultPack := gopacket.NewPacket(IPserializeBuffer.Bytes(), layers.LayerTypeIPv6, gopacket.Default)
+		resultPack.Metadata().CaptureLength = len(resultPack.Data())
+		resultPack.Metadata().Length = len(resultPack.Data())
+		fmt.Println("package length", resultPack.Metadata().Length)
+		//seems the capture length is 0 so the pcapwrite cannot write it, try to give them a write value
 		nomalPack <- resultPack
 		return
 	} else {
@@ -322,7 +356,8 @@ func main() {
 	tcpPack := make(chan gopacket.Packet, 5) // maybe need change buffersize for chan
 	nomalPack := make(chan gopacket.Packet, 5)
 	fragV4Pack := make(chan gopacket.Packet, 5)
-	go readSource(packetSource, tcpPack, nomalPack, fragV4Pack)
+	endNotification := make(chan bool)
+	go readSource(packetSource, tcpPack, nomalPack, fragV4Pack, endNotification)
 	go v4Defrag(fragV4Pack, nomalPack)
 	go pcapWrite(w, nomalPack)
 	streamFactory := &DNSStreamFactory{normal: nomalPack}
@@ -330,4 +365,6 @@ func main() {
 	assembler := tcpassembly.NewAssembler(streamPool)
 	go tcpAssemble(tcpPack, assembler)
 
+	// wait for the reading to finish
+	<-endNotification
 }
