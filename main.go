@@ -12,8 +12,10 @@ import (
 	"github.com/google/gopacket/pcapgo"
 	"github.com/google/gopacket/tcpassembly"
 	"github.com/google/gopacket/tcpassembly/tcpreader"
+	"github.com/miekg/dns"
 	"io"
 	"os"
+	"time"
 )
 
 /*
@@ -100,6 +102,7 @@ func readSource(source *gopacket.PacketSource, tcpPack chan gopacket.Packet,
 
 	}
 	fmt.Printf("done reading in readSource()\n")
+	time.Sleep(10000) // give a time to write file
 	endNotification <- true
 
 }
@@ -108,6 +111,16 @@ func pcapWrite(w *pcapgo.Writer, pack chan gopacket.Packet) error {
 	for {
 		packet := <-pack
 		fmt.Println("receive a package in pcap Write")
+		dns_message := new(dns.Msg)
+		udp := packet.Layer(layers.LayerTypeUDP)
+		if udp == nil {
+			fmt.Println("no udp")
+		}
+		err = dns_message.Unpack(udp.LayerPayload())
+		if err != nil {
+			fmt.Printf("can not parse dns message")
+		}
+		fmt.Printf(dns_message.String())
 		err = w.WritePacket(packet.Metadata().CaptureInfo, packet.Data()) // write the payload
 		if err != nil {
 			fmt.Println("error in Write File: ", err)
@@ -228,10 +241,15 @@ func (h *dnsStream) creatPacket(msg_buf []byte, nomalPack chan gopacket.Packet) 
 		Checksum: 30026,
 	}
 	UDPNewSerializBuffer := gopacket.NewSerializeBuffer() // this buffer could be used as a payload of IP layer
+	udpBuffer, _ := UDPNewSerializBuffer.PrependBytes(len(msg_buf))
+
+	copy(udpBuffer, msg_buf)
+
 	ops := gopacket.SerializeOptions{
 		FixLengths:       true,
 		ComputeChecksums: true,
 	}
+
 	if h.net.EndpointType() == layers.EndpointIPv4 {
 		ip_checksum := layers.IPv4{}
 		ip_checksum.Version = 4
@@ -255,6 +273,7 @@ func (h *dnsStream) creatPacket(msg_buf []byte, nomalPack chan gopacket.Packet) 
 		//err = nil
 		//	need err handle there
 	}
+
 	fmt.Println("finished creat udplayer, the length is ", udpLayer.Length)
 	if h.net.EndpointType() == layers.EndpointIPv4 { // if it is from ipv4, construct a ipv4 layer
 		ip := layers.IPv4{
@@ -279,6 +298,9 @@ func (h *dnsStream) creatPacket(msg_buf []byte, nomalPack chan gopacket.Packet) 
 		}
 		//serialize it and use the serilize buffer to new packet
 		IPserializeBuffer := gopacket.NewSerializeBuffer()
+
+		ipBuffer, _ := IPserializeBuffer.PrependBytes(len(UDPNewSerializBuffer.Bytes()))
+		copy(ipBuffer, UDPNewSerializBuffer.Bytes())
 		err = ip.SerializeTo(IPserializeBuffer, ops)
 		if err != nil {
 			fmt.Print("error in create ipv4 Layer")
@@ -288,10 +310,8 @@ func (h *dnsStream) creatPacket(msg_buf []byte, nomalPack chan gopacket.Packet) 
 		}
 		fmt.Println("finished creat ip, the length is ", ip.Length)
 		resultPack := gopacket.NewPacket(IPserializeBuffer.Bytes(), layers.LayerTypeIPv4, gopacket.Default)
-
 		resultPack.Metadata().CaptureLength = len(resultPack.Data())
 		resultPack.Metadata().Length = len(resultPack.Data())
-		fmt.Println("package length", resultPack.Metadata().Length)
 		//seems the capture length is 0 so the pcapwrite cannot write it, try to give them a write value
 		nomalPack <- resultPack
 		return
@@ -324,7 +344,6 @@ func (h *dnsStream) creatPacket(msg_buf []byte, nomalPack chan gopacket.Packet) 
 		resultPack := gopacket.NewPacket(IPserializeBuffer.Bytes(), layers.LayerTypeIPv6, gopacket.Default)
 		resultPack.Metadata().CaptureLength = len(resultPack.Data())
 		resultPack.Metadata().Length = len(resultPack.Data())
-		fmt.Println("package length", resultPack.Metadata().Length)
 		//seems the capture length is 0 so the pcapwrite cannot write it, try to give them a write value
 		nomalPack <- resultPack
 		return
@@ -354,13 +373,13 @@ func main() {
 	defer Output.Close()
 	// need add function call here
 	tcpPack := make(chan gopacket.Packet, 5) // maybe need change buffersize for chan
-	nomalPack := make(chan gopacket.Packet, 5)
+	normalPack := make(chan gopacket.Packet, 5)
 	fragV4Pack := make(chan gopacket.Packet, 5)
 	endNotification := make(chan bool)
-	go readSource(packetSource, tcpPack, nomalPack, fragV4Pack, endNotification)
-	go v4Defrag(fragV4Pack, nomalPack)
-	go pcapWrite(w, nomalPack)
-	streamFactory := &DNSStreamFactory{normal: nomalPack}
+	go readSource(packetSource, tcpPack, normalPack, fragV4Pack, endNotification)
+	go v4Defrag(fragV4Pack, normalPack)
+	go pcapWrite(w, normalPack)
+	streamFactory := &DNSStreamFactory{normal: normalPack}
 	streamPool := tcpassembly.NewStreamPool(streamFactory)
 	assembler := tcpassembly.NewAssembler(streamPool)
 	go tcpAssemble(tcpPack, assembler)
