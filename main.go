@@ -111,16 +111,6 @@ func pcapWrite(w *pcapgo.Writer, pack chan gopacket.Packet) error {
 	for {
 		packet := <-pack
 		fmt.Println("receive a package in pcap Write")
-		dns_message := new(dns.Msg)
-		udp := packet.Layer(layers.LayerTypeUDP)
-		if udp == nil {
-			fmt.Println("no udp")
-		}
-		err = dns_message.Unpack(udp.LayerPayload())
-		if err != nil {
-			fmt.Printf("can not parse dns message")
-		}
-		fmt.Printf(dns_message.String())
 		err = w.WritePacket(packet.Metadata().CaptureInfo, packet.Data()) // write the payload
 		if err != nil {
 			fmt.Println("error in Write File: ", err)
@@ -308,8 +298,21 @@ func (h *dnsStream) creatPacket(msg_buf []byte, nomalPack chan gopacket.Packet) 
 			//err = nil
 			//	need err handle there
 		}
+
 		fmt.Println("finished creat ip, the length is ", ip.Length)
-		resultPack := gopacket.NewPacket(IPserializeBuffer.Bytes(), layers.LayerTypeIPv4, gopacket.Default)
+		resultPack := gopacket.NewPacket(IPserializeBuffer.Bytes(), layers.LinkTypeIPv4, gopacket.Default)
+
+		udpLayer := resultPack.Layer(layers.LayerTypeUDP)
+		if udpLayer == nil {
+			fmt.Println("can not fine udp Layer in result")
+		}
+		dns_message := new(dns.Msg)
+		err = dns_message.Unpack(udpLayer.LayerPayload())
+		if err != nil {
+			fmt.Println("can not parse dns message")
+		}
+		fmt.Printf(dns_message.String())
+
 		resultPack.Metadata().CaptureLength = len(resultPack.Data())
 		resultPack.Metadata().Length = len(resultPack.Data())
 		//seems the capture length is 0 so the pcapwrite cannot write it, try to give them a write value
@@ -341,7 +344,7 @@ func (h *dnsStream) creatPacket(msg_buf []byte, nomalPack chan gopacket.Packet) 
 			return
 		}
 		fmt.Println("finished creat ip, the length is ", ip.Length)
-		resultPack := gopacket.NewPacket(IPserializeBuffer.Bytes(), layers.LayerTypeIPv6, gopacket.Default)
+		resultPack := gopacket.NewPacket(IPserializeBuffer.Bytes(), layers.LinkTypeIPv6, gopacket.Default)
 		resultPack.Metadata().CaptureLength = len(resultPack.Data())
 		resultPack.Metadata().Length = len(resultPack.Data())
 		//seems the capture length is 0 so the pcapwrite cannot write it, try to give them a write value
@@ -373,13 +376,13 @@ func main() {
 	defer Output.Close()
 	// need add function call here
 	tcpPack := make(chan gopacket.Packet, 5) // maybe need change buffersize for chan
-	normalPack := make(chan gopacket.Packet, 5)
+	nomalPack := make(chan gopacket.Packet, 5)
 	fragV4Pack := make(chan gopacket.Packet, 5)
 	endNotification := make(chan bool)
-	go readSource(packetSource, tcpPack, normalPack, fragV4Pack, endNotification)
-	go v4Defrag(fragV4Pack, normalPack)
-	go pcapWrite(w, normalPack)
-	streamFactory := &DNSStreamFactory{normal: normalPack}
+	go readSource(packetSource, tcpPack, nomalPack, fragV4Pack, endNotification)
+	go v4Defrag(fragV4Pack, nomalPack)
+	go pcapWrite(w, nomalPack)
+	streamFactory := &DNSStreamFactory{normal: nomalPack}
 	streamPool := tcpassembly.NewStreamPool(streamFactory)
 	assembler := tcpassembly.NewAssembler(streamPool)
 	go tcpAssemble(tcpPack, assembler)
