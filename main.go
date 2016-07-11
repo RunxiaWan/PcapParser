@@ -66,6 +66,7 @@ func readSource(source *gopacket.PacketSource, tcpPack chan gopacket.Packet,
 		} else {
 			v6Layer := packet.Layer(layers.LayerTypeIPv6)
 			if v6Layer != nil {
+
 				continue
 				// do v6 process
 			} else {
@@ -73,12 +74,29 @@ func readSource(source *gopacket.PacketSource, tcpPack chan gopacket.Packet,
 				if v4Layer == nil {
 					continue
 				}
-				ip := layers.IPv4{}
-				ipData := append(v4Layer.LayerContents(), v4Layer.LayerPayload()...)
-				df := gopacket.NilDecodeFeedback
-				ip.DecodeFromBytes(ipData, df)
+				ip := v4Layer.(*layers.IPv4)
+
 				if notFraV4(ip) {
-					normalPack <- packet
+					IPserializeBuffer := gopacket.NewSerializeBuffer()
+					buf, _ := IPserializeBuffer.PrependBytes(len(ip.Payload))
+					copy(buf, ip.Payload)
+					ops := gopacket.SerializeOptions{
+						FixLengths:       true,
+						ComputeChecksums: true,
+					}
+					//	ipBuffer, _ := IPserializeBuffer.PrependBytes(len(ip.Payload))
+					//	copy(ipBuffer, ip.Payload)
+					ip.SerializeTo(IPserializeBuffer, ops)
+					sendPack := gopacket.NewPacket(IPserializeBuffer.Bytes(), layers.LayerTypeIPv4, gopacket.Default)
+					err := sendPack.ErrorLayer()
+					if err != nil {
+						fmt.Println("Error decoding some part of the packet:", err)
+						normalPack <- packet
+					} else {
+						sendPack.Metadata().CaptureLength = len(sendPack.Data())
+						sendPack.Metadata().Length = len(sendPack.Data())
+						normalPack <- sendPack
+					}
 				} else {
 					fragV4Pack <- packet
 				}
@@ -111,15 +129,6 @@ func pcapWrite(w *pcapgo.Writer, pack chan gopacket.Packet) error {
 	var err error
 	for {
 		packet := <-pack
-		/*
-			if packet.Layer(layers.LayerTypeEthernet) != nil {
-				w.WriteFileHeader(uint32(packet.Metadata().CaptureLength), layers.LinkTypeEthernet)
-			} else if packet.Layer(layers.LayerTypeIPv6) != nil {
-				w.WriteFileHeader(uint32(packet.Metadata().CaptureLength), layers.LinkTypeIPv6)
-			} else if packet.Layer(layers.LayerTypeIPv4) != nil {
-				w.WriteFileHeader(uint32(packet.Metadata().CaptureLength), layers.LinkTypeIPv4)
-			}
-		*/
 		fmt.Println("receive a package in pcap Write")
 		err = w.WritePacket(packet.Metadata().CaptureInfo, packet.Data()) // write the payload
 		if err != nil {
@@ -146,44 +155,24 @@ func v4Defrag(v4frag chan gopacket.Packet, normalPack chan gopacket.Packet) erro
 				FixLengths:       true,
 				ComputeChecksums: true,
 			}
+			// it should be remebered that you should copy the payload in when you use SerializeTo
+			ip_payload, _ := b.PrependBytes(len(in.Payload))
+			copy(ip_payload, in.Payload)
 			in.SerializeTo(b, ops)
 			resultPack := gopacket.NewPacket(b.Bytes(), layers.LayerTypeIPv4, gopacket.Default)
 			err := resultPack.ErrorLayer()
 			if err != nil {
 				fmt.Println("Error decoding some part of the packet:", err) //need error handle here
 			}
+			resultPack.Metadata().CaptureLength = len(resultPack.Data())
+			resultPack.Metadata().Length = len(resultPack.Data())
 			fmt.Println("defrag a package")
 			normalPack <- resultPack
 		}
-		/*
-			ip := layers.IPv4{}
-			data := append(layer.LayerContents(), layer.LayerPayload()...)
-			df := gopacket.NilDecodeFeedback
-			ip.DecodeFromBytes(data, df)
-			in, err := defragger.DefragIPv4(&ip)
-			if err != nil {
-				return err //error handle
-			} else if in == nil { //part of fragment continue
-				continue
-			} else {
-				b := gopacket.NewSerializeBuffer()
-				ops := gopacket.SerializeOptions{
-					FixLengths:       true,
-					ComputeChecksums: true,
-				}
-				in.SerializeTo(b, ops)
-				resultPack := gopacket.NewPacket(b.Bytes(), layers.LayerTypeIPv4, gopacket.Default)
-				err := resultPack.ErrorLayer()
-				if err != nil {
-					fmt.Println("Error decoding some part of the packet:", err) //need error handle here
-				}
-				fmt.Println("defrag a package")
-				normalPack <- resultPack
-			}*/
 	}
 	return nil
 }
-func notFraV4(ip layers.IPv4) bool {
+func notFraV4(ip *layers.IPv4) bool {
 	// don't defrag packet with DF flag
 	if ip.Flags&layers.IPv4DontFragment != 0 {
 		return true
@@ -223,22 +212,22 @@ func (h *DNSStreamFactory) New(net, transport gopacket.Flow) tcpassembly.Stream 
 }
 
 func (h *dnsStream) run(nomalpack chan gopacket.Packet) {
-	fmt.Printf("reading rebuilt TCP stream\n")
+	//fmt.Printf("reading rebuilt TCP stream\n")
 	for {
 		len_buf := make([]byte, 2, 2)
 		nread, err := io.ReadFull(&h.r, len_buf)
-		fmt.Printf("Read %d bytes\n", nread)
+		//fmt.Printf("Read %d bytes\n", nread)
 		if nread < 2 || (err != nil && err != io.EOF) {
 			// needs error handle there
-			fmt.Printf("error in reading first two bytes: %s", err)
+			//		fmt.Println("error in reading first two bytes: %s", err)
 			break
 		}
 		msg_len := uint(len_buf[0])<<8 | uint(len_buf[1])
-		fmt.Printf("msg_len:%d\n", msg_len)
+		//	fmt.Printf("msg_len:%d\n", msg_len)
 		msg_buf := make([]byte, msg_len, msg_len)
 		nread, err = io.ReadFull(&h.r, msg_buf)
 		if err != nil {
-			fmt.Println("error in reading full tcp data: %s", err)
+			//		fmt.Println("error in reading full tcp data: %s", err)
 			break
 		}
 		h.creatPacket(msg_buf, nomalpack)
@@ -393,7 +382,7 @@ func main() {
 	//need to add tcp assemble and udp defrag here.
 	Output, err := os.Create(FilePathOutput)
 	w := pcapgo.NewWriter(Output)
-	w.WriteFileHeader(65536, layers.LinkTypeIPv4)
+	w.WriteFileHeader(65536, layers.LinkTypeRaw)
 	defer Output.Close()
 	// need add function call here
 	tcpPack := make(chan gopacket.Packet, 5) // maybe need change buffersize for chan
