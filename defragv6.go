@@ -1,11 +1,10 @@
 // Package ip4defrag implements a IPv4 defragmenter
-package ip4defrag
+package main
 
 import (
 	"container/list"
 	"fmt"
 	"github.com/google/gopacket"
-	"github.com/google/gopacket/ip4defrag"
 	"github.com/google/gopacket/layers"
 	"log"
 	"sync"
@@ -28,7 +27,7 @@ type fragmentList struct {
 	LastSeen      time.Time
 }
 
-var debug debugging = false // or flip to false
+var debug debugging = false// or flip to false
 type debugging bool
 
 func (d debugging) Printf(format string, args ...interface{}) {
@@ -48,18 +47,19 @@ type ipv6 struct {
 }
 
 // newIPv4 returns a new initialized IPv4 Flow
-func newipv6(packet *gopacket.Packet) ipv6 {
-	frag := packet.Layer(layers.IPv6Fragment).(*layers.IPv6Fragment)
-	ip := packet.Layer(layers.IPv6).(*layers.IPv6)
+func newipv6(packet gopacket.Packet) ipv6 {
+	frag := packet.Layer(layers.LayerTypeIPv6Fragment).(*layers.IPv6Fragment)
+	ip := packet.Layer(layers.LayerTypeIPv6).(*layers.IPv6)
 	return ipv6{
 		ip6: ip.NetworkFlow(),
 		id:  frag.Identification,
 	}
 }
 
-func (d *IPv6Defragmenter) DefragIPv4(in *gopacket.Packet) (*gopacket.Packet, error) {
+func (d *IPv6Defragmenter) DefragIPv6(in gopacket.Packet) (gopacket.Packet, error) {
 	// check if we need to defrag
-	if frag := in.Layer(layers.LayerTypeIPv6Fragment); frag == nil {
+	frag := in.Layer(layers.LayerTypeIPv6Fragment)
+	if frag == nil {
 		return in, nil
 	}
 	v6frag := frag.(*layers.IPv6Fragment)
@@ -102,7 +102,7 @@ func (d *IPv6Defragmenter) DefragIPv4(in *gopacket.Packet) (*gopacket.Packet, er
 	return nil, err2
 }
 
-func (f *fragmentList) insert(in *gopacket.Packet) (*gopacket.Packet, error) {
+func (f *fragmentList) insert(in gopacket.Packet) (gopacket.Packet, error) {
 	// TODO: should keep a copy of *in in the list
 	// or not (ie the packet source is reliable) ?
 	fragv6 := in.Layer(layers.LayerTypeIPv6Fragment).(*layers.IPv6Fragment)
@@ -111,7 +111,7 @@ func (f *fragmentList) insert(in *gopacket.Packet) (*gopacket.Packet, error) {
 		f.List.PushBack(in)
 	} else {
 		for e := f.List.Front(); e != nil; e = e.Next() {
-			packet, _ := e.Value.(*gopacket.Packet)
+			packet, _ := e.Value.(gopacket.Packet)
 			frag := packet.Layer(layers.LayerTypeIPv6Fragment).(*layers.IPv6Fragment)
 			if fragv6.FragmentOffset <= frag.FragmentOffset {
 				debug.Printf("defrag: inserting frag %d before existing frag %d \n",
@@ -148,28 +148,29 @@ func (f *fragmentList) insert(in *gopacket.Packet) (*gopacket.Packet, error) {
 }
 
 //need work
-func (f *fragmentList) build(in *gopacket.Packet) (*gopacket.Packet, error) {
+func (f *fragmentList) build(in gopacket.Packet) (gopacket.Packet, error) {
 	var final []byte
 	var currentOffset uint16 = 0
 
 	debug.Printf("defrag: building the datagram \n")
 	for e := f.List.Front(); e != nil; e = e.Next() {
-		pack, _ := e.Value.(*gopacket.Packet)
+		pack, _ := e.Value.(gopacket.Packet)
 		frag := pack.Layer(layers.LayerTypeIPv6Fragment).(*layers.IPv6Fragment)
+		ip := pack.Layer(layers.LayerTypeIPv6).(*layers.IPv6)
 		if frag.FragmentOffset*8 == currentOffset {
 			debug.Printf("defrag: building - adding %d\n", frag.FragmentOffset*8)
 			final = append(final, frag.Payload...)
-			currentOffset = currentOffset + frag.Length
-		} else if frag.FragOffset*8 < currentOffset {
+			currentOffset = currentOffset + ip.Length - 8
+		} else if frag.FragmentOffset*8 < currentOffset {
 			// overlapping fragment - let's take only what we need
-			startAt := currentOffset - frag.FragOffset*8
+			startAt := currentOffset - frag.FragmentOffset*8
 			debug.Printf("defrag: building - overlapping, starting at %d\n",
 				startAt)
-			if startAt > frag.Length {
+			if startAt > ip.Length-8 {
 				return nil, fmt.Errorf("defrag: building - invalid fragment")
 			}
 			final = append(final, frag.Payload[startAt:]...)
-			currentOffset = currentOffset + frag.FragOffset*8
+			currentOffset = currentOffset + frag.FragmentOffset*8
 		} else {
 			// Houston - we have an hole !
 			debug.Printf("defrag: hole found while building, " +
@@ -191,8 +192,6 @@ func (f *fragmentList) build(in *gopacket.Packet) (*gopacket.Packet, error) {
 		SrcIP:        final_ipv6.SrcIP,
 		DstIP:        final_ipv6.DstIP,
 		HopByHop:     final_ipv6.HopByHop,
-		// hbh will be pointed to by HopByHop if that layer exists.
-		hbh: final_ipv6.hbh,
 	}
 	out.Payload = final
 	v6SerailizeBuffer := gopacket.NewSerializeBuffer()
@@ -203,10 +202,10 @@ func (f *fragmentList) build(in *gopacket.Packet) (*gopacket.Packet, error) {
 		ComputeChecksums: true,
 	}
 	out.SerializeTo(v6SerailizeBuffer, ops)
-	outPacket := gopacket.NewPacket(v6SerailizeBuffer.Bytes(), gopacket.Default)
+	outPacket := gopacket.NewPacket(v6SerailizeBuffer.Bytes(), layers.LayerTypeIPv6, gopacket.Default)
 	outPacket.Metadata().CaptureLength = len(outPacket.Data())
 	outPacket.Metadata().Length = len(outPacket.Data())
-	return &outPacket, nil
+	return outPacket, nil
 }
 func NewIPv6Defragmenter() *IPv6Defragmenter {
 	return &IPv6Defragmenter{
