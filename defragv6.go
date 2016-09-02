@@ -1,4 +1,4 @@
-// Package ip4defrag implements a IPv4 defragmenter
+// Package ip6defrag implements a IPv6 defragmenter
 package main
 
 import (
@@ -13,10 +13,9 @@ import (
 
 //need to check
 const (
-	IPv6MinimumFragmentSize    = 1280
 	IPv6MaximumSize            = 65535
 	IPv6MaximumFragmentOffset  = 8191
-	IPv6MaximumFragmentListLen = 52
+	IPv6MaximumFragmentListLen = 8191
 )
 
 type fragmentList struct {
@@ -46,8 +45,8 @@ type ipv6 struct {
 	id  uint32
 }
 
-// newIPv4 returns a new initialized IPv4 Flow
-func newipv6(packet gopacket.Packet) ipv6 {
+// newIPv6 returns a new initialized IPv6 Flow
+func newIpv6(packet gopacket.Packet) ipv6 {
 	frag := packet.Layer(layers.LayerTypeIPv6Fragment).(*layers.IPv6Fragment)
 	ip := packet.Layer(layers.LayerTypeIPv6).(*layers.IPv6)
 	return ipv6{
@@ -72,7 +71,7 @@ func (d *IPv6Defragmenter) DefragIPv6(in gopacket.Packet) (gopacket.Packet, erro
 		v6frag.Identification, v6frag.FragmentOffset*8)
 
 	// do we already has seen a flow between src/dst with that Id
-	ipf := newipv6(in)
+	ipf := newIpv6(in)
 	var fl *fragmentList
 	var exist bool
 	d.Lock()
@@ -105,6 +104,7 @@ func (d *IPv6Defragmenter) DefragIPv6(in gopacket.Packet) (gopacket.Packet, erro
 	}
 	return nil, err2
 }
+
 func (d *IPv6Defragmenter) securityChecks(in *layers.IPv6Fragment) (bool, error) {
 	if in.FragmentOffset > IPv6MaximumFragmentOffset {
 		return false, fmt.Errorf("defrag: fragment offset too big "+
@@ -117,9 +117,8 @@ func (d *IPv6Defragmenter) securityChecks(in *layers.IPv6Fragment) (bool, error)
 	}
 	return true, nil
 }
+
 func (f *fragmentList) insert(in gopacket.Packet) (gopacket.Packet, error) {
-	// TODO: should keep a copy of *in in the list
-	// or not (ie the packet source is reliable) ?
 	fragv6 := in.Layer(layers.LayerTypeIPv6Fragment).(*layers.IPv6Fragment)
 	fragOffset := fragv6.FragmentOffset * 8
 	if fragOffset >= f.Highest {
@@ -136,8 +135,6 @@ func (f *fragmentList) insert(in gopacket.Packet) (gopacket.Packet, error) {
 			}
 		}
 	}
-	// packet.Metadata().Timestamp should have been better, but
-	// we don't have this info there...
 	f.LastSeen = in.Metadata().Timestamp
 	fragLength := in.Layer(layers.LayerTypeIPv6).(*layers.IPv6).Length - 8 // need to conform
 	// After inserting the Fragment, we update the counters
@@ -209,19 +206,20 @@ func (f *fragmentList) build(in gopacket.Packet) (gopacket.Packet, error) {
 		HopByHop:     final_ipv6.HopByHop,
 	}
 	out.Payload = final
-	v6SerailizeBuffer := gopacket.NewSerializeBuffer()
-	v6Buffer, _ := v6SerailizeBuffer.PrependBytes(len(final))
+	v6SerializeBuffer := gopacket.NewSerializeBuffer()
+	v6Buffer, _ := v6SerializeBuffer.PrependBytes(len(final))
 	copy(v6Buffer, final)
 	ops := gopacket.SerializeOptions{
 		FixLengths:       true,
 		ComputeChecksums: true,
 	}
-	out.SerializeTo(v6SerailizeBuffer, ops)
-	outPacket := gopacket.NewPacket(v6SerailizeBuffer.Bytes(), layers.LayerTypeIPv6, gopacket.Default)
+	out.SerializeTo(v6SerializeBuffer, ops)
+	outPacket := gopacket.NewPacket(v6SerializeBuffer.Bytes(), layers.LayerTypeIPv6, gopacket.Default)
 	outPacket.Metadata().CaptureLength = len(outPacket.Data())
 	outPacket.Metadata().Length = len(outPacket.Data())
 	return outPacket, nil
 }
+
 func NewIPv6Defragmenter() *IPv6Defragmenter {
 	return &IPv6Defragmenter{
 		ipFlows: make(map[ipv6]*fragmentList),
