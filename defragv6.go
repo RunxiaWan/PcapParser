@@ -15,7 +15,7 @@ import (
 const (
 	IPv6MinimumFragmentSize    = 1280
 	IPv6MaximumSize            = 65535
-	IPv6MaximumFragmentOffset  = 8189
+	IPv6MaximumFragmentOffset  = 8191
 	IPv6MaximumFragmentListLen = 52
 )
 
@@ -27,7 +27,7 @@ type fragmentList struct {
 	LastSeen      time.Time
 }
 
-var debug debugging = false// or flip to false
+var debug debugging = true // or flip to false
 type debugging bool
 
 func (d debugging) Printf(format string, args ...interface{}) {
@@ -63,6 +63,10 @@ func (d *IPv6Defragmenter) DefragIPv6(in gopacket.Packet) (gopacket.Packet, erro
 		return in, nil
 	}
 	v6frag := frag.(*layers.IPv6Fragment)
+	st, err := d.securityChecks(v6frag)
+	if err != nil || st == false {
+		return nil, err
+	}
 	// ok, got a fragment
 	debug.Printf("defrag: got in.Id=%d in.FragOffset=%d",
 		v6frag.Identification, v6frag.FragmentOffset*8)
@@ -101,7 +105,18 @@ func (d *IPv6Defragmenter) DefragIPv6(in gopacket.Packet) (gopacket.Packet, erro
 	}
 	return nil, err2
 }
-
+func (d *IPv6Defragmenter) securityChecks(in *layers.IPv6Fragment) (bool, error) {
+	if in.FragmentOffset > IPv6MaximumFragmentOffset {
+		return false, fmt.Errorf("defrag: fragment offset too big "+
+			"(handcrafted? %d > %d)", in.FragmentOffset, IPv6MaximumFragmentOffset)
+	}
+	fragOffset := in.FragmentOffset * 8
+	if fragOffset+uint16(len(in.Payload)) > IPv6MaximumSize {
+		return false, fmt.Errorf("defrag: fragment will overrun "+
+			"(handcrafted? %d > %d)", fragOffset+uint16(len(in.Payload)), IPv6MaximumFragmentOffset)
+	}
+	return true, nil
+}
 func (f *fragmentList) insert(in gopacket.Packet) (gopacket.Packet, error) {
 	// TODO: should keep a copy of *in in the list
 	// or not (ie the packet source is reliable) ?
