@@ -102,10 +102,12 @@ func readSource(source *gopacket.PacketSource, tcpPack chan gopacket.Packet,
 			}
 		}
 	}
+	// end fragmentation goroutines
+	close(fragv6Pack)
 	// give a time to write file
 	endNotification <- true
-
 }
+
 func pcapWrite(w *pcapgo.Writer, pack chan gopacket.Packet) error {
 	var err error
 	for {
@@ -118,20 +120,19 @@ func pcapWrite(w *pcapgo.Writer, pack chan gopacket.Packet) error {
 	}
 	return err
 }
-func v6Defrag(v6frag chan gopacket.Packet, normalPack chan gopacket.Packet) error {
+
+func v6Defrag(v6frag chan gopacket.Packet, normalPack chan gopacket.Packet) {
 	defragger := NewIPv6Defragmenter()
-	for {
-		fragpack := <-v6frag
+	for fragpack := range v6frag {
 		in, err := defragger.DefragIPv6(fragpack)
 		if err != nil {
-			return err
-		} else if in == nil {
-			continue
-		} else {
+			// TODO: log the error
+		} else if in != nil {
 			normalPack <- in
 		}
 	}
 }
+
 func v4Defrag(v4frag chan gopacket.Packet, normalPack chan gopacket.Packet) error {
 	defragger := ip4defrag.NewIPv4Defragmenter()
 	for {
