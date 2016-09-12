@@ -17,8 +17,11 @@ import (
 )
 
 func readSource(source *gopacket.PacketSource, tcpPack chan gopacket.Packet,
-	normalPack chan gopacket.Packet, fragV4Pack chan gopacket.Packet, fragv6Pack chan gopacket.Packet,
+	normalPack chan gopacket.Packet, fragV4Pack chan gopacket.Packet,
 	endNotification chan bool) {
+
+	defragger := NewIPv6Defragmenter()
+
 	for packet := range source.Packets() {
 		tcpLayer := packet.Layer(layers.LayerTypeTCP)
 		if tcpLayer != nil {
@@ -28,30 +31,40 @@ func readSource(source *gopacket.PacketSource, tcpPack chan gopacket.Packet,
 			v6Layer := packet.Layer(layers.LayerTypeIPv6)
 			if v6Layer != nil {
 				v6frag := packet.Layer(layers.LayerTypeIPv6Fragment)
-				if v6frag == nil {
-					ipv6 := v6Layer.(*layers.IPv6)
-					IPserializeBuffer := gopacket.NewSerializeBuffer()
-					buf, _ := IPserializeBuffer.PrependBytes(len(ipv6.Payload))
-					copy(buf, ipv6.Payload)
-					ops := gopacket.SerializeOptions{
-						FixLengths:       true,
-						ComputeChecksums: true,
-					}
-					ipv6.SerializeTo(IPserializeBuffer, ops)
-					sendPack := gopacket.NewPacket(IPserializeBuffer.Bytes(), layers.LayerTypeIPv6, gopacket.Default)
-					err := sendPack.ErrorLayer()
-					if err != nil {
-						fmt.Println("Error decoding some part of the packet:", err)
-						normalPack <- packet
-					} else {
-						sendPack.Metadata().CaptureLength = len(sendPack.Data())
-						sendPack.Metadata().Length = len(sendPack.Data())
-						normalPack <- sendPack
-					}
-				} else {
-					fragv6Pack <- packet
+                if v6frag != nil {
+                    defragmentedPacket, err := defragger.DefragIPv6(packet)
+                    // handle any errors
+		            if err != nil {
+			            // TODO: log the error
+                        continue
+		            }
+                    // if defragmentedPacket is nil, reassembly not yet done
+                    if defragmentedPacket == nil {
+                        continue
+                    }
+                    // if we got a defragmented packet, process it
+                    v6Layer = defragmentedPacket.Layer(layers.LayerTypeIPv6)
+                }
+
+				ipv6 := v6Layer.(*layers.IPv6)
+				IPserializeBuffer := gopacket.NewSerializeBuffer()
+				buf, _ := IPserializeBuffer.PrependBytes(len(ipv6.Payload))
+				copy(buf, ipv6.Payload)
+				ops := gopacket.SerializeOptions{
+					FixLengths:       true,
+					ComputeChecksums: true,
 				}
-				// do v6 process
+				ipv6.SerializeTo(IPserializeBuffer, ops)
+				sendPack := gopacket.NewPacket(IPserializeBuffer.Bytes(), layers.LayerTypeIPv6, gopacket.Default)
+				err := sendPack.ErrorLayer()
+				if err != nil {
+					fmt.Println("Error decoding some part of the packet:", err)
+					normalPack <- packet
+				} else {
+					sendPack.Metadata().CaptureLength = len(sendPack.Data())
+					sendPack.Metadata().Length = len(sendPack.Data())
+					normalPack <- sendPack
+				}
 			} else {
 				v4Layer := packet.Layer(layers.LayerTypeIPv4)
 				if v4Layer == nil {
@@ -102,8 +115,6 @@ func readSource(source *gopacket.PacketSource, tcpPack chan gopacket.Packet,
 			}
 		}
 	}
-	// end fragmentation goroutines
-	close(fragv6Pack)
 	// give a time to write file
 	endNotification <- true
 }
@@ -119,18 +130,6 @@ func pcapWrite(w *pcapgo.Writer, pack chan gopacket.Packet) error {
 		}
 	}
 	return err
-}
-
-func v6Defrag(v6frag chan gopacket.Packet, normalPack chan gopacket.Packet) {
-	defragger := NewIPv6Defragmenter()
-	for fragpack := range v6frag {
-		in, err := defragger.DefragIPv6(fragpack)
-		if err != nil {
-			// TODO: log the error
-		} else if in != nil {
-			normalPack <- in
-		}
-	}
 }
 
 func v4Defrag(v4frag chan gopacket.Packet, normalPack chan gopacket.Packet) error {
@@ -384,16 +383,14 @@ func main() {
 	tcpPack := make(chan gopacket.Packet, 5) // maybe need change buffersize for chan
 	normalPack := make(chan gopacket.Packet, 5)
 	fragV4Pack := make(chan gopacket.Packet, 5)
-	fragV6Pack := make(chan gopacket.Packet, 5)
 	endNotification := make(chan bool)
-	go readSource(packetSource, tcpPack, normalPack, fragV4Pack, fragV6Pack, endNotification)
-	go v6Defrag(fragV6Pack, normalPack)
+	go readSource(packetSource, tcpPack, normalPack, fragV4Pack, endNotification)
 	go v4Defrag(fragV4Pack, normalPack)
-	go pcapWrite(w, normalPack)
 	streamFactory := &DNSStreamFactory{normal: normalPack}
 	streamPool := tcpassembly.NewStreamPool(streamFactory)
 	assembler := tcpassembly.NewAssembler(streamPool)
 	go tcpAssemble(tcpPack, assembler)
+	go pcapWrite(w, normalPack)
 
 	// wait for the reading to finish
 	<-endNotification
