@@ -206,7 +206,7 @@ func (h *DNSStreamFactory) New(net, transport gopacket.Flow) tcpassembly.Stream 
 	return &hstream.r
 }
 
-func (h *dnsStream) run(nomalpack chan gopacket.Packet) {
+func (h *dnsStream) run(normalpack chan gopacket.Packet) {
 	//fmt.Printf("reading rebuilt TCP stream\n")
 	for {
 		len_buf := make([]byte, 2, 2)
@@ -225,10 +225,10 @@ func (h *dnsStream) run(nomalpack chan gopacket.Packet) {
 			//		fmt.Println("error in reading full tcp data: %s", err)
 			break
 		}
-		h.creatPacket(msg_buf, nomalpack)
+		h.creatPacket(msg_buf, normalpack)
 	}
 }
-func (h *dnsStream) creatPacket(msg_buf []byte, nomalPack chan gopacket.Packet) {
+func (h *dnsStream) creatPacket(msg_buf []byte, normalPack chan gopacket.Packet) {
 	var sourcePort, DesPort int16
 	//read the port from tranport flow
 	b_buf := bytes.NewBuffer(h.transport.Src().Raw())
@@ -320,7 +320,7 @@ func (h *dnsStream) creatPacket(msg_buf []byte, nomalPack chan gopacket.Packet) 
 		resultPack.Metadata().CaptureLength = len(resultPack.Data())
 		resultPack.Metadata().Length = len(resultPack.Data())
 		//seems the capture length is 0 so the pcapwrite cannot write it, try to give them a write value
-		nomalPack <- resultPack
+		normalPack <- resultPack
 		return
 
 	} else if h.net.EndpointType() == layers.EndpointIPv6 {
@@ -352,7 +352,7 @@ func (h *dnsStream) creatPacket(msg_buf []byte, nomalPack chan gopacket.Packet) 
 		resultPack.Metadata().CaptureLength = len(resultPack.Data())
 		resultPack.Metadata().Length = len(resultPack.Data())
 		//seems the capture length is 0 so the pcapwrite cannot write it, try to give them a write value
-		nomalPack <- resultPack
+		normalPack <- resultPack
 		return
 	} else {
 		return //unknown network just return?
@@ -381,15 +381,15 @@ func main() {
 	defer Output.Close()
 	// need add function call here
 	tcpPack := make(chan gopacket.Packet, 5) // maybe need change buffersize for chan
-	nomalPack := make(chan gopacket.Packet, 5)
+	normalPack := make(chan gopacket.Packet, 5)
 	fragV4Pack := make(chan gopacket.Packet, 5)
 	fragV6Pack := make(chan gopacket.Packet, 5)
 	endNotification := make(chan bool)
-	go readSource(packetSource, tcpPack, nomalPack, fragV4Pack, fragV6Pack, endNotification)
-	go v6Defrag(fragV6Pack, nomalPack)
-	go v4Defrag(fragV4Pack, nomalPack)
-	go pcapWrite(w, nomalPack)
-	streamFactory := &DNSStreamFactory{normal: nomalPack}
+	go readSource(packetSource, tcpPack, normalPack, fragV4Pack, fragV6Pack, endNotification)
+	go v6Defrag(fragV6Pack, normalPack)
+	go v4Defrag(fragV4Pack, normalPack)
+	go pcapWrite(w, normalPack)
+	streamFactory := &DNSStreamFactory{normal: normalPack}
 	streamPool := tcpassembly.NewStreamPool(streamFactory)
 	assembler := tcpassembly.NewAssembler(streamPool)
 	go tcpAssemble(tcpPack, assembler)
