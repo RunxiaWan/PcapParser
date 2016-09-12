@@ -12,49 +12,10 @@ import (
 	"github.com/google/gopacket/pcapgo"
 	"github.com/google/gopacket/tcpassembly"
 	"github.com/google/gopacket/tcpassembly/tcpreader"
-	//	"github.com/miekg/dns"
 	"io"
 	"os"
-	"time"
 )
 
-/*
-func writeData(w *pcapgo.Writer, source *gopacket.PacketSource) error {
-	defragger := ip4defrag.NewIPv4Defragmenter()
-	w.WriteFileHeader(65536, layers.LinkTypeEthernet)
-	for packet := range source.Packets() {
-		tcpLayer := packet.Layer(layers.LayerTypeTCP)
-		if tcpLayer != nil {
-			// do assemble
-		} else {
-			v6Layer := packet.Layer(layers.LayerTypeIPv6)
-			if v6Layer != nil {
-				// do v6 defrag
-			} else {
-				v4Layer := packet.Layer(layers.LayerTypeIPv4)
-				if v4Layer == nil {
-					continue
-				}
-				in, err := defragger.DefragIPv4(v4Layer)
-				if err != nil {
-					return err
-				} else if in == nil { //part of fragment continue
-					continue
-				} else {
-					err := w.WritePacket(packet.Metadata().CaptureInfo, in.LayerContents()) //write the header
-					if err != nil {
-						return err
-					}
-					err := w.WritePacket(packet.Metadata().CaptureInfo, in.LayerPayload()) // write the payload
-					if err != nil {
-						return err
-					}
-				}
-			}
-		}
-	}
-	return nil
-}*/
 func readSource(source *gopacket.PacketSource, tcpPack chan gopacket.Packet,
 	normalPack chan gopacket.Packet, fragV4Pack chan gopacket.Packet, fragv6Pack chan gopacket.Packet,
 	endNotification chan bool) {
@@ -140,9 +101,7 @@ func readSource(source *gopacket.PacketSource, tcpPack chan gopacket.Packet,
 					}*/
 			}
 		}
-		time.Sleep(time.Millisecond * 500)
 	}
-	fmt.Printf("done reading in readSource()\n")
 	// give a time to write file
 	endNotification <- true
 
@@ -151,13 +110,11 @@ func pcapWrite(w *pcapgo.Writer, pack chan gopacket.Packet) error {
 	var err error
 	for {
 		packet := <-pack
-		fmt.Println("receive a package in pcap Write")
 		err = w.WritePacket(packet.Metadata().CaptureInfo, packet.Data()) // write the payload
 		if err != nil {
 			fmt.Println("error in Write File: ", err)
 			continue
 		}
-		fmt.Println("susccessfully write a package")
 	}
 	return err
 }
