@@ -408,7 +408,7 @@ func main() {
 	flag.StringVar(&FilePathOutput, "out", "", "the output file")
 	flag.Parse() // in mind if we need to do search in file.
 	if FilePathInput == "" || FilePathOutput == "" {
-		fmt.Print("lack of parameters!")
+		flag.PrintDefaults()
 		return
 	}
 	handle, err := pcap.OpenOffline(FilePathInput)
