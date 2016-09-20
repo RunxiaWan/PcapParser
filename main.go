@@ -9,11 +9,11 @@ import (
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/ip4defrag"
 	"github.com/google/gopacket/layers"
-	"github.com/google/gopacket/pcap"
 	"github.com/google/gopacket/pcapgo"
 	"github.com/google/gopacket/tcpassembly"
 	"github.com/google/gopacket/tcpassembly/tcpreader"
 	"io"
+	"log"
 	"os"
 )
 
@@ -365,20 +365,43 @@ func main() {
 		flag.PrintDefaults()
 		return
 	}
-	handle, err := pcap.OpenOffline(FilePathInput)
-	if err != nil {
-		panic(err)
+
+	// open our input pcap file
+	var Input *os.File
+	var err error
+	if FilePathInput == "-" {
+		Input = os.Stdin
+	} else {
+		Input, err = os.Open(FilePathInput)
+		if err != nil {
+			log.Fatalf("Error with os.Open('%s'); %v", FilePathInput, err)
+		}
+		defer Input.Close()
 	}
-	defer handle.Close()
-	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
-	//need to add tcp assemble and udp defrag here.
-	Output, err := os.Create(FilePathOutput)
+	pcap_file, err := pcapgo.NewReader(Input)
+	if err != nil {
+		log.Fatalf("Error with pcapgo.NewReader(Input); %v", err)
+	}
+	packetSource := gopacket.NewPacketSource(pcap_file, pcap_file.LinkType())
+
+	// open our output pcap file
+	var Output *os.File
+	if FilePathOutput == "-" {
+		Output = os.Stdout
+	} else {
+		Output, err = os.Create(FilePathOutput)
+		if err != nil {
+			log.Fatalf("Error with os.Create('%s'); %v", FilePathOutput, err)
+		}
+		defer Output.Close()
+	}
 	w := pcapgo.NewWriter(Output)
 	w.WriteFileHeader(65536, layers.LinkTypeRaw)
-	defer Output.Close()
 
+	// channel used to write packets
 	normalPack := make(chan gopacket.Packet, 5)
 
+	// setup for TCP reassembly
 	tcpPack := make(chan gopacket.Packet, 5) // maybe need change buffersize for chan
 	streamFactory := &DNSStreamFactory{normal: normalPack}
 	streamPool := tcpassembly.NewStreamPool(streamFactory)
@@ -386,7 +409,9 @@ func main() {
 	tcpFinished := make(chan bool)
 	go tcpAssemble(tcpPack, tcpFinished, assembler)
 
+	// read our packets in a background goroutine
 	go readSource(packetSource, tcpPack, tcpFinished, normalPack)
 
+	// collect packets and write them
 	pcapWrite(w, normalPack)
 }
