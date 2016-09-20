@@ -2,10 +2,10 @@ package main
 
 import (
 	"bytes"
-	//	"dns-master"
 	"fmt"
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/bytediff"
+	"github.com/google/gopacket/ip4defrag"
 	"github.com/google/gopacket/pcap"
 	"github.com/google/gopacket/tcpassembly"
 	"github.com/miekg/dns"
@@ -22,8 +22,7 @@ func TestnotFrag(t *testing.T) {
 		DstIP:   net.IPv4(2, 2, 2, 2),
 		Flags:   layers.IPv4DontFragment,
 	}
-	nomalPack := make(chan gopacket.Packet, 5)
-	fragV4Pack := make(chan gopacket.Packet, 5)
+	v4defragger := ip4defrag.NewIPv4Defragmenter()
 	b := gopacket.NewSerializeBuffer()
 	ops := gopacket.SerializeOptions{
 		FixLengths:       true,
@@ -31,27 +30,47 @@ func TestnotFrag(t *testing.T) {
 	}
 	ip.SerializeTo(b, ops)
 	pack := gopacket.NewPacket(b.Bytes(), layers.LinkTypeIPv4, gopacket.Default)
-	fragV4Pack <- pack
-	err := v4Defrag(fragV4Pack, nomalPack)
+	_, err := v4Defrag(v4defragger, pack)
 	if err != nil {
 		t.Errorf("v4defrag do not return err when no frag pack is in")
 	}
 }
 func Testv4Defrag(t *testing.T) {
-	nomalPack := make(chan gopacket.Packet, 5)
-	fragV4Pack := make(chan gopacket.Packet, 5)
-	go v4Defrag(fragV4Pack, nomalPack)
+	v4defragger := ip4defrag.NewIPv4Defragmenter()
 	pack1 := gopacket.NewPacket(testPing1Frag1, layers.LinkTypeEthernet, gopacket.Default)
-	fragV4Pack <- pack1
 	pack2 := gopacket.NewPacket(testPing1Frag2, layers.LinkTypeEthernet, gopacket.Default)
-	fragV4Pack <- pack2
 	pack3 := gopacket.NewPacket(testPing1Frag3, layers.LinkTypeEthernet, gopacket.Default)
-	fragV4Pack <- pack3
 	pack4 := gopacket.NewPacket(testPing1Frag4, layers.LinkTypeEthernet, gopacket.Default)
-	fragV4Pack <- pack4
-	result := <-nomalPack
+	result, err := v4Defrag(v4defragger, pack1)
+	if err != nil {
+		t.Fatalf("error defragmenting pack1")
+	}
+	if result != nil {
+		t.Fatalf("unexpected defragmented packet after pack1")
+	}
+	result, err = v4Defrag(v4defragger, pack2)
+	if err != nil {
+		t.Fatalf("error defragmenting pack2")
+	}
+	if result != nil {
+		t.Fatalf("unexpected defragmented packet after pack2")
+	}
+	result, err = v4Defrag(v4defragger, pack3)
+	if err != nil {
+		t.Fatalf("error defragmenting pack3")
+	}
+	if result != nil {
+		t.Fatalf("unexpected defragmented packet after pack3")
+	}
+	result, err = v4Defrag(v4defragger, pack4)
+	if err != nil {
+		t.Fatalf("error defragmenting pack4")
+	}
+	if result == nil {
+		t.Fatalf("missing defragmented packet after pack4")
+	}
 	ip := result.Layer(layers.LayerTypeIPv4)
-	//TEST if the ip matches expectation
+	// TEST if the ip matches expectation
 	if ip == nil {
 		t.Errorf("defrag does not return IPV4 LAYER")
 	}
@@ -69,6 +88,7 @@ func Testv4Defrag(t *testing.T) {
 		t.Errorf("defrag: payload is not correctly defragmented")
 	}
 }
+
 func TestTCP(t *testing.T) {
 	handle, err := pcap.OpenOffline("tcptest.pcap")
 	if err != nil {
@@ -77,6 +97,7 @@ func TestTCP(t *testing.T) {
 	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
 	defer handle.Close()
 	tcpPack := make(chan gopacket.Packet, 10)
+	tcpFinished := make(chan bool)
 	nomalPack := make(chan gopacket.Packet, 5)
 	for input_pack := range packetSource.Packets() { // send tcp package for channel
 		tcpLayer := input_pack.Layer(layers.LayerTypeTCP)
@@ -88,7 +109,7 @@ func TestTCP(t *testing.T) {
 	streamFactory := &DNSStreamFactory{normal: nomalPack}
 	streamPool := tcpassembly.NewStreamPool(streamFactory)
 	assembler := tcpassembly.NewAssembler(streamPool)
-	go tcpAssemble(tcpPack, assembler)
+	go tcpAssemble(tcpPack, tcpFinished, assembler)
 	pack := <-nomalPack
 	udpLayer := pack.Layer(layers.LayerTypeUDP)
 	if udpLayer == nil {
