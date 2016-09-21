@@ -26,7 +26,7 @@ type fragmentList struct {
 	LastSeen      time.Time
 }
 
-var debug debugging = true // or flip to false
+var debug debugging = false // or flip to false
 type debugging bool
 
 func (d debugging) Printf(format string, args ...interface{}) {

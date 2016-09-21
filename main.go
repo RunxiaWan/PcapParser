@@ -231,7 +231,7 @@ func (h *dnsStream) createPacket(msg_buf []byte, normalPack chan gopacket.Packet
 		ip_checksum := layers.IPv4{}
 		ip_checksum.Version = 4
 		// XXX: TTL should be copied from the original packets somehow
-		ip_checksum.TTL = 1
+		ip_checksum.TTL = 64
 		ip_checksum.SrcIP = h.net.Src().Raw()
 		ip_checksum.DstIP = h.net.Dst().Raw()
 		udpLayer.SetNetworkLayerForChecksum(&ip_checksum)
@@ -240,7 +240,7 @@ func (h *dnsStream) createPacket(msg_buf []byte, normalPack chan gopacket.Packet
 		ip6_checksum.Version = 6
 		ip6_checksum.NextHeader = layers.IPProtocolNoNextHeader
 		// XXX: HopLimit should be copied from the original packets somehow
-		ip6_checksum.HopLimit = 1
+		ip6_checksum.HopLimit = 64
 		ip6_checksum.SrcIP = h.net.Src().Raw()
 		ip6_checksum.DstIP = h.net.Dst().Raw()
 		udpLayer.SetNetworkLayerForChecksum(&ip6_checksum)
@@ -267,7 +267,7 @@ func (h *dnsStream) createPacket(msg_buf []byte, normalPack chan gopacket.Packet
 			Flags:      0,
 			FragOffset: 0,
 			// XXX: TTL should be copied from the original packets somehow
-			TTL:      1,
+			TTL:      64,
 			Protocol: layers.IPProtocolUDP,
 			Checksum: 0,
 			SrcIP:    h.net.Src().Raw(),
@@ -309,7 +309,7 @@ func (h *dnsStream) createPacket(msg_buf []byte, normalPack chan gopacket.Packet
 			Length:       0,
 			NextHeader:   layers.IPProtocolNoNextHeader, //no sure what next header should be used there
 			// XXX: HopLimit should be copied from the original packets somehow
-			HopLimit: 1,
+			HopLimit: 64,
 			SrcIP:    h.net.Src().Raw(),
 			DstIP:    h.net.Dst().Raw(),
 			HopByHop: nil,
