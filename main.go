@@ -266,13 +266,14 @@ func (h *dnsStream) createPacket(msg_buf []byte, normalPack chan gopacket.Packet
 			Id:         0,
 			Flags:      0,
 			FragOffset: 0,
-			TTL:        0,
-			Protocol:   layers.IPProtocolUDP,
-			Checksum:   0,
-			SrcIP:      h.net.Src().Raw(),
-			DstIP:      h.net.Dst().Raw(),
-			Options:    []layers.IPv4Option{},
-			Padding:    []byte{},
+			// XXX: TTL should be copied from the original packets somehow
+			TTL:      1,
+			Protocol: layers.IPProtocolUDP,
+			Checksum: 0,
+			SrcIP:    h.net.Src().Raw(),
+			DstIP:    h.net.Dst().Raw(),
+			Options:  []layers.IPv4Option{},
+			Padding:  []byte{},
 		}
 		//serialize it and use the serialize buffer to new packet
 		IPserializeBuffer := gopacket.NewSerializeBuffer()
@@ -307,10 +308,11 @@ func (h *dnsStream) createPacket(msg_buf []byte, normalPack chan gopacket.Packet
 			FlowLabel:    0,
 			Length:       0,
 			NextHeader:   layers.IPProtocolNoNextHeader, //no sure what next header should be used there
-			HopLimit:     0,
-			SrcIP:        h.net.Src().Raw(),
-			DstIP:        h.net.Dst().Raw(),
-			HopByHop:     nil,
+			// XXX: HopLimit should be copied from the original packets somehow
+			HopLimit: 1,
+			SrcIP:    h.net.Src().Raw(),
+			DstIP:    h.net.Dst().Raw(),
+			HopByHop: nil,
 			// hbh will be pointed to by HopByHop if that layer exists.
 		}
 		IPserializeBuffer := gopacket.NewSerializeBuffer()
