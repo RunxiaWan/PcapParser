@@ -171,11 +171,9 @@ func (h *DNSStreamFactory) New(net, transport gopacket.Flow) tcpassembly.Stream 
 }
 
 func (h *dnsStream) run(normalpack chan gopacket.Packet) {
-	//fmt.Printf("reading rebuilt TCP stream\n")
 	for {
 		len_buf := make([]byte, 2, 2)
 		nread, err := io.ReadFull(&h.r, len_buf)
-		//fmt.Printf("Read %d bytes\n", nread)
 		if nread < 2 || (err != nil && err != io.EOF) {
 			// needs error handle there
 			//		fmt.Println("error in reading first two bytes: %s", err)
@@ -193,12 +191,12 @@ func (h *dnsStream) run(normalpack chan gopacket.Packet) {
 	}
 }
 func (h *dnsStream) createPacket(msg_buf []byte, normalPack chan gopacket.Packet) {
-	var sourcePort, DesPort int16
-	//read the port from tranport flow
+	var sourcePort, destPort int16
+	// read the port from transport flow
 	b_buf := bytes.NewBuffer(h.transport.Src().Raw())
 	binary.Read(b_buf, binary.BigEndian, &sourcePort)
 	b_buf = bytes.NewBuffer(h.transport.Dst().Raw())
-	binary.Read(b_buf, binary.BigEndian, &DesPort)
+	binary.Read(b_buf, binary.BigEndian, &destPort)
 	//new a UDP layer
 	udpLayer := layers.UDP{
 		BaseLayer: layers.BaseLayer{
@@ -206,7 +204,7 @@ func (h *dnsStream) createPacket(msg_buf []byte, normalPack chan gopacket.Packet
 			Payload:  msg_buf,
 		},
 		SrcPort:  layers.UDPPort(sourcePort),
-		DstPort:  layers.UDPPort(DesPort),
+		DstPort:  layers.UDPPort(destPort),
 		Length:   1024,
 		Checksum: 30026,
 	}
@@ -244,7 +242,6 @@ func (h *dnsStream) createPacket(msg_buf []byte, normalPack chan gopacket.Packet
 		//	need err handle there
 	}
 
-	fmt.Println("finished create udplayer, the length is ", udpLayer.Length)
 	if h.net.EndpointType() == layers.EndpointIPv4 { // if it is from ipv4, construct a ipv4 layer
 		ip := layers.IPv4{
 			BaseLayer: layers.BaseLayer{
@@ -266,7 +263,7 @@ func (h *dnsStream) createPacket(msg_buf []byte, normalPack chan gopacket.Packet
 			Options:    []layers.IPv4Option{},
 			Padding:    []byte{},
 		}
-		//serialize it and use the serilize buffer to new packet
+		//serialize it and use the serialize buffer to new packet
 		IPserializeBuffer := gopacket.NewSerializeBuffer()
 
 		ipBuffer, _ := IPserializeBuffer.PrependBytes(len(UDPNewSerializBuffer.Bytes()))
@@ -279,7 +276,6 @@ func (h *dnsStream) createPacket(msg_buf []byte, normalPack chan gopacket.Packet
 			//	need err handle there
 		}
 
-		fmt.Println("finished create ip, the length is ", ip.Length)
 		resultPack := gopacket.NewPacket(IPserializeBuffer.Bytes(), layers.LayerTypeIPv4, gopacket.Default)
 		resultPack.Metadata().CaptureLength = len(resultPack.Data())
 		resultPack.Metadata().Length = len(resultPack.Data())
@@ -308,10 +304,9 @@ func (h *dnsStream) createPacket(msg_buf []byte, normalPack chan gopacket.Packet
 		IPserializeBuffer := gopacket.NewSerializeBuffer()
 		err := ip.SerializeTo(IPserializeBuffer, ops)
 		if err != nil {
-			fmt.Printf("error in create IPV6 Layer")
+			fmt.Print("error in create IPv6 Layer")
 			return
 		}
-		fmt.Println("finished create ip, the length is ", ip.Length)
 		resultPack := gopacket.NewPacket(IPserializeBuffer.Bytes(), layers.LayerTypeIPv6, gopacket.Default)
 		resultPack.Metadata().CaptureLength = len(resultPack.Data())
 		resultPack.Metadata().Length = len(resultPack.Data())
@@ -319,7 +314,10 @@ func (h *dnsStream) createPacket(msg_buf []byte, normalPack chan gopacket.Packet
 		normalPack <- resultPack
 		return
 	} else {
-		return //unknown network just return?
+		// This should not be possible, since we only add packets to our TCP reassembler
+		// from our IPv4 or IPv6 handlers.
+		fmt.Printf("unknown layer type %d\n", h.net.EndpointType())
+		return
 	}
 }
 func main() {
