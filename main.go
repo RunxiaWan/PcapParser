@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
-	"errors"
 	"flag"
 	"fmt"
 	"github.com/google/gopacket"
@@ -72,21 +71,19 @@ func readSource(source *gopacket.PacketSource, tcpPack chan gopacket.Packet, tcp
 					ip := v4Layer.(*layers.IPv4)
 
 					if isFragmentedV4(ip) {
-						defragmentedPacket, err := v4Defrag(v4defragger, packet)
+						ip, err := v4defragger.DefragIPv4(ip)
 						// handle any errors
 						if err != nil {
 							// TODO: log the error
 							continue
 						}
-						// if defragmentedPacket is nil, reassembly not yet done
-						if defragmentedPacket == nil {
+						// if returned Layer is nil, reassembly not yet done
+						if ip == nil {
 							continue
 						}
-						// if we got a defragmented packet, process it
-						v4Layer = defragmentedPacket.Layer(layers.LayerTypeIPv4)
 					}
 
-					// XXX: why are we building a new packet here?!?
+					// build a new packet to remove Ethernet framing if needed
 					IPserializeBuffer := gopacket.NewSerializeBuffer()
 					buf, _ := IPserializeBuffer.PrependBytes(len(ip.Payload))
 					copy(buf, ip.Payload)
@@ -130,36 +127,6 @@ func pcapWrite(w *pcapgo.Writer, pack chan gopacket.Packet) {
 			fmt.Println("error in Write File: ", err)
 		}
 	}
-}
-
-func v4Defrag(defragger *ip4defrag.IPv4Defragmenter, fragpack gopacket.Packet) (gopacket.Packet, error) {
-	layer := fragpack.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
-	in, err := defragger.DefragIPv4(layer)
-	if err != nil {
-		return nil, err
-	}
-	if in == nil {
-		return nil, nil
-	}
-	b := gopacket.NewSerializeBuffer()
-	ops := gopacket.SerializeOptions{
-		FixLengths:       true,
-		ComputeChecksums: true,
-	}
-	// it should be remembered that you should copy the payload in when you use SerializeTo
-	ip_payload, _ := b.PrependBytes(len(in.Payload))
-	copy(ip_payload, in.Payload)
-	in.SerializeTo(b, ops)
-	resultPack := gopacket.NewPacket(b.Bytes(), layers.LayerTypeIPv4, gopacket.Default)
-	err_decoding := resultPack.ErrorLayer()
-	if err_decoding != nil {
-		// TODO: improve this error message
-		fmt.Println("Error decoding some part of the packet:", err_decoding)
-		return nil, errors.New("Error decoding packet")
-	}
-	resultPack.Metadata().CaptureLength = len(resultPack.Data())
-	resultPack.Metadata().Length = len(resultPack.Data())
-	return resultPack, nil
 }
 
 func isFragmentedV4(ip *layers.IPv4) bool {
