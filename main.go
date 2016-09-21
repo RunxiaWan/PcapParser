@@ -22,14 +22,18 @@ func readSource(source *gopacket.PacketSource, tcpPack chan gopacket.Packet, tcp
 	v4defragger := ip4defrag.NewIPv4Defragmenter()
 	v6defragger := NewIPv6Defragmenter()
 
+	n := 0
 	for packet := range source.Packets() {
+		n++
 		tcpLayer := packet.Layer(layers.LayerTypeTCP)
 		if tcpLayer != nil {
 			tcpPack <- packet
-			// send packet to tcp ASSEMBLER
+			//fmt.Printf("%d: TCP packet\n", n)
+			// send packet to TCP assembler
 		} else {
 			v6Layer := packet.Layer(layers.LayerTypeIPv6)
 			if v6Layer != nil {
+				//fmt.Printf("%d: IPv6 packet\n", n)
 				v6frag := packet.Layer(layers.LayerTypeIPv6Fragment)
 				if v6frag != nil {
 					defragmentedPacket, err := v6defragger.DefragIPv6(packet)
@@ -59,28 +63,32 @@ func readSource(source *gopacket.PacketSource, tcpPack chan gopacket.Packet, tcp
 				err := sendPack.ErrorLayer()
 				if err != nil {
 					fmt.Println("Error decoding some part of the packet:", err)
-					normalPack <- packet
-				} else {
-					sendPack.Metadata().CaptureLength = len(sendPack.Data())
-					sendPack.Metadata().Length = len(sendPack.Data())
-					normalPack <- sendPack
 				}
+				sendPack.Metadata().CaptureLength = len(sendPack.Data())
+				sendPack.Metadata().Length = len(sendPack.Data())
+				normalPack <- sendPack
 			} else {
 				v4Layer := packet.Layer(layers.LayerTypeIPv4)
 				if v4Layer != nil {
+					//fmt.Printf("%d: IPv4 packet\n", n)
 					ip := v4Layer.(*layers.IPv4)
 
 					if isFragmentedV4(ip) {
-						ip, err := v4defragger.DefragIPv4(ip)
+						//fmt.Printf("IPv4 fragmented\n")
+						var err error
+						ip, err = v4defragger.DefragIPv4(ip)
 						// handle any errors
 						if err != nil {
+							fmt.Printf("IPv4 error in fragmentation\n")
 							// TODO: log the error
 							continue
 						}
 						// if returned Layer is nil, reassembly not yet done
 						if ip == nil {
+							//fmt.Printf("IPv4 reassembly not done\n")
 							continue
 						}
+						//fmt.Printf("IPv4 reassembly complete!\n")
 					}
 
 					// build a new packet to remove Ethernet framing if needed
@@ -96,15 +104,16 @@ func readSource(source *gopacket.PacketSource, tcpPack chan gopacket.Packet, tcp
 					err := sendPack.ErrorLayer()
 					if err != nil {
 						fmt.Println("Error decoding some part of the packet:", err)
-						normalPack <- packet
-					} else {
-						sendPack.Metadata().CaptureLength = len(sendPack.Data())
-						sendPack.Metadata().Length = len(sendPack.Data())
-						normalPack <- sendPack
 					}
+					sendPack.Metadata().CaptureLength = len(sendPack.Data())
+					sendPack.Metadata().Length = len(sendPack.Data())
+					normalPack <- sendPack
 				} else {
-					// Neither IPv6 nor IPv4... just copy to output stream
-					normalPack <- packet
+					//fmt.Printf("%d: Skipping non-IP packet\n", n)
+					// Neither IPv6 nor IPv4.
+					// Since we do not preserve the Ethernet (or other)
+					// framing, we cannot include these packets in our output.
+					// Remove from out output stream.
 				}
 			}
 		}
@@ -281,6 +290,7 @@ func (h *dnsStream) createPacket(msg_buf []byte, normalPack chan gopacket.Packet
 		resultPack.Metadata().Length = len(resultPack.Data())
 		//seems the capture length is 0 so the pcapwrite cannot write it, try to give them a write value
 		normalPack <- resultPack
+		//fmt.Printf("built IPv4 packet from TCP layer\n")
 		return
 
 	} else if h.net.EndpointType() == layers.EndpointIPv6 {
@@ -311,6 +321,7 @@ func (h *dnsStream) createPacket(msg_buf []byte, normalPack chan gopacket.Packet
 		resultPack.Metadata().CaptureLength = len(resultPack.Data())
 		resultPack.Metadata().Length = len(resultPack.Data())
 		//seems the capture length is 0 so the pcapwrite cannot write it, try to give them a write value
+		//fmt.Printf("built IPv6 packet from TCP layer\n")
 		normalPack <- resultPack
 		return
 	} else {
