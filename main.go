@@ -62,7 +62,7 @@ func readSource(source *gopacket.PacketSource, tcpPack chan gopacket.Packet, tcp
 				sendPack := gopacket.NewPacket(IPserializeBuffer.Bytes(), layers.LayerTypeIPv6, gopacket.Default)
 				err := sendPack.ErrorLayer()
 				if err != nil {
-					fmt.Println("Error decoding some part of the packet:", err)
+					fmt.Printf("Packet #%d problem building IPv6 packet - %s\n", n, err)
 				}
 				sendPack.Metadata().CaptureLength = len(sendPack.Data())
 				sendPack.Metadata().Length = len(sendPack.Data())
@@ -103,7 +103,7 @@ func readSource(source *gopacket.PacketSource, tcpPack chan gopacket.Packet, tcp
 					sendPack := gopacket.NewPacket(IPserializeBuffer.Bytes(), layers.LayerTypeIPv4, gopacket.Default)
 					err := sendPack.ErrorLayer()
 					if err != nil {
-						fmt.Println("Error decoding some part of the packet:", err)
+						fmt.Printf("Packet #%d problem building IPv4 packet - %s\n", n, err)
 					}
 					sendPack.Metadata().CaptureLength = len(sendPack.Data())
 					sendPack.Metadata().Length = len(sendPack.Data())
@@ -238,7 +238,7 @@ func (h *dnsStream) createPacket(msg_buf []byte, normalPack chan gopacket.Packet
 	} else {
 		ip6_checksum := layers.IPv6{}
 		ip6_checksum.Version = 6
-		ip6_checksum.NextHeader = layers.IPProtocolNoNextHeader
+		ip6_checksum.NextHeader = layers.IPProtocolUDP
 		// XXX: HopLimit should be copied from the original packets somehow
 		ip6_checksum.HopLimit = 64
 		ip6_checksum.SrcIP = h.net.Src().Raw()
@@ -307,7 +307,7 @@ func (h *dnsStream) createPacket(msg_buf []byte, normalPack chan gopacket.Packet
 			TrafficClass: 0,
 			FlowLabel:    0,
 			Length:       0,
-			NextHeader:   layers.IPProtocolNoNextHeader, //no sure what next header should be used there
+			NextHeader:   layers.IPProtocolUDP,
 			// XXX: HopLimit should be copied from the original packets somehow
 			HopLimit: 64,
 			SrcIP:    h.net.Src().Raw(),
@@ -316,11 +316,14 @@ func (h *dnsStream) createPacket(msg_buf []byte, normalPack chan gopacket.Packet
 			// hbh will be pointed to by HopByHop if that layer exists.
 		}
 		IPserializeBuffer := gopacket.NewSerializeBuffer()
+		ipBuffer, _ := IPserializeBuffer.PrependBytes(len(UDPNewSerializBuffer.Bytes()))
+		copy(ipBuffer, UDPNewSerializBuffer.Bytes())
 		err := ip.SerializeTo(IPserializeBuffer, ops)
 		if err != nil {
 			fmt.Print("error in create IPv6 Layer")
 			return
 		}
+
 		resultPack := gopacket.NewPacket(IPserializeBuffer.Bytes(), layers.LayerTypeIPv6, gopacket.Default)
 		resultPack.Metadata().CaptureLength = len(resultPack.Data())
 		resultPack.Metadata().Length = len(resultPack.Data())
