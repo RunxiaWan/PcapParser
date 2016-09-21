@@ -230,7 +230,8 @@ func (h *dnsStream) createPacket(msg_buf []byte, normalPack chan gopacket.Packet
 	if h.net.EndpointType() == layers.EndpointIPv4 {
 		ip_checksum := layers.IPv4{}
 		ip_checksum.Version = 4
-		ip_checksum.TTL = 0
+		// XXX: TTL should be copied from the original packets somehow
+		ip_checksum.TTL = 1
 		ip_checksum.SrcIP = h.net.Src().Raw()
 		ip_checksum.DstIP = h.net.Dst().Raw()
 		udpLayer.SetNetworkLayerForChecksum(&ip_checksum)
@@ -238,7 +239,8 @@ func (h *dnsStream) createPacket(msg_buf []byte, normalPack chan gopacket.Packet
 		ip6_checksum := layers.IPv6{}
 		ip6_checksum.Version = 6
 		ip6_checksum.NextHeader = layers.IPProtocolNoNextHeader
-		ip6_checksum.HopLimit = 0
+		// XXX: HopLimit should be copied from the original packets somehow
+		ip6_checksum.HopLimit = 1
 		ip6_checksum.SrcIP = h.net.Src().Raw()
 		ip6_checksum.DstIP = h.net.Dst().Raw()
 		udpLayer.SetNetworkLayerForChecksum(&ip6_checksum)
