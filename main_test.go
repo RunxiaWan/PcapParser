@@ -30,7 +30,7 @@ func TestnotFrag(t *testing.T) {
 	}
 	ip.SerializeTo(b, ops)
 	pack := gopacket.NewPacket(b.Bytes(), layers.LinkTypeIPv4, gopacket.Default)
-	_, err := v4Defrag(v4defragger, pack)
+	_, err := v4defragger.DefragIPv4(pack.Layer(layers.LayerTypeIPv4).(*layers.IPv4))
 	if err != nil {
 		t.Errorf("v4defrag do not return err when no frag pack is in")
 	}
@@ -41,35 +41,35 @@ func Testv4Defrag(t *testing.T) {
 	pack2 := gopacket.NewPacket(testPing1Frag2, layers.LinkTypeEthernet, gopacket.Default)
 	pack3 := gopacket.NewPacket(testPing1Frag3, layers.LinkTypeEthernet, gopacket.Default)
 	pack4 := gopacket.NewPacket(testPing1Frag4, layers.LinkTypeEthernet, gopacket.Default)
-	result, err := v4Defrag(v4defragger, pack1)
+	result, err := v4defragger.DefragIPv4(pack1.Layer(layers.LayerTypeIPv4).(*layers.IPv4))
 	if err != nil {
 		t.Fatalf("error defragmenting pack1")
 	}
 	if result != nil {
 		t.Fatalf("unexpected defragmented packet after pack1")
 	}
-	result, err = v4Defrag(v4defragger, pack2)
+	result, err = v4defragger.DefragIPv4(pack2.Layer(layers.LayerTypeIPv4).(*layers.IPv4))
 	if err != nil {
 		t.Fatalf("error defragmenting pack2")
 	}
 	if result != nil {
 		t.Fatalf("unexpected defragmented packet after pack2")
 	}
-	result, err = v4Defrag(v4defragger, pack3)
+	result, err = v4defragger.DefragIPv4(pack3.Layer(layers.LayerTypeIPv4).(*layers.IPv4))
 	if err != nil {
 		t.Fatalf("error defragmenting pack3")
 	}
 	if result != nil {
 		t.Fatalf("unexpected defragmented packet after pack3")
 	}
-	result, err = v4Defrag(v4defragger, pack4)
+	result, err = v4defragger.DefragIPv4(pack4.Layer(layers.LayerTypeIPv4).(*layers.IPv4))
 	if err != nil {
 		t.Fatalf("error defragmenting pack4")
 	}
 	if result == nil {
 		t.Fatalf("missing defragmented packet after pack4")
 	}
-	ip := result.Layer(layers.LayerTypeIPv4)
+	ip := result
 	// TEST if the ip matches expectation
 	if ip == nil {
 		t.Errorf("defrag does not return IPV4 LAYER")
